@@ -23,9 +23,6 @@ static double h2d=1.0;
 static uint8_t cimgarr[MAP_HEIGHT][MAP_WIDTH][3];
 static double himgarr[MAP_HEIGHT][MAP_WIDTH];
 
-// support array for sky back ground
-static uint8_t sky[SCREEN_HEIGHT][SCREEN_WIDTH][3] = {0};
-
 // support array to store final render
 static uint8_t fimg[SCREEN_HEIGHT][SCREEN_WIDTH][3] = {0};
 
@@ -33,76 +30,69 @@ static uint8_t fimg[SCREEN_HEIGHT][SCREEN_WIDTH][3] = {0};
 static double p2ip = 0.0060;
 static double d2s = 2, dinc = 0.5, dbase;
 static int dlim = 1600;
-//static double hvspan[SCREEN_WIDTH], vvspan[SCREEN_HEIGHT][SCREEN_WIDTH];  discarded due to trinomentry optimization
-// angles not needed anymore. sin & cos values of angles enough
 
 // optimization variables
-static double dvar_co[SCREEN_HEIGHT][SCREEN_WIDTH][3];
-static double dinc_co[SCREEN_HEIGHT][SCREEN_WIDTH][3];
-static double *dvar_ptr_x=NULL, *dinc_ptr_x=NULL;
-static double *dvar_ptr_y=NULL, *dinc_ptr_y=NULL;
-static double *dvar_ptr_z=NULL, *dinc_ptr_z=NULL;
-static uint8_t *fimg_ptr = NULL;
-//static double phi=0, theta=0;  discarded due to trignometry optimization
-static double cos_orih, sin_orih, cos_oriv, sin_oriv;
-static double cos_theta, sin_theta, cos_phi, sin_phi, op_buf;
-static double sin_hvspan[SCREEN_WIDTH], sin_vvspan[SCREEN_HEIGHT][SCREEN_WIDTH];
-static double cos_hvspan[SCREEN_WIDTH], cos_vvspan[SCREEN_HEIGHT][SCREEN_WIDTH];
+static double dvar_x, dvar_y;
+static double dinc_x, dinc_y;
+static double dvar_z[SCREEN_HEIGHT], dinc_z[SCREEN_HEIGHT];
+static uint8_t sky[3] = {135, 206, 235};
+static double cos_orih, sin_orih, tan_oriv;
+static double cos_theta, sin_theta, tan_phi;
+static double sin_hvspan[SCREEN_WIDTH], cos_hvspan[SCREEN_WIDTH];
+static double tan_vvspan[SCREEN_WIDTH][SCREEN_HEIGHT];
 
 
 void rasterize(){
-    memcpy(fimg, sky, sizeof(sky));
     int i, j, k;
-    sin_oriv = sin(oriv);
-    cos_oriv = cos(oriv);
+    // height begin and end parameters
+    int hb, he, t;
+    unsigned short xt, yt;
+    uint8_t *cptr;
+    double *hptr;
+    tan_oriv = tan(oriv);
     sin_orih = sin(orih);
     cos_orih = cos(orih);
     for(j=0;j<SCREEN_WIDTH;j++){
-        // theta = orih+hvspan[j];
         cos_theta = (cos_orih*cos_hvspan[j])-(sin_orih*sin_hvspan[j]);
         sin_theta = (cos_orih*sin_hvspan[j])+(sin_orih*cos_hvspan[j]);
+        
+        dvar_x = x + dbase*cos_theta;                  // x
+        dinc_x = dinc*cos_theta;                       // x
+        
+        dvar_y = y + dbase*sin_theta;                  // y
+        dinc_y = dinc*sin_theta;                       // y
         for(i=0;i<SCREEN_HEIGHT;i++){
-            // phi = oriv+vvspan[i][j];
-            cos_phi = (cos_oriv*cos_vvspan[i][j])-(sin_oriv*sin_vvspan[i][j]);
-            sin_phi = (sin_oriv*cos_vvspan[i][j])+(cos_oriv*sin_vvspan[i][j]);
-            op_buf = cos_theta*cos_phi;
-            dvar_co[i][j][0] = x + dbase*op_buf;                  // x
-            dinc_co[i][j][0] = dinc*op_buf;                       // x
-            op_buf = sin_theta*cos_phi;
-            dvar_co[i][j][1] = y + dbase*op_buf;                  // y
-            dinc_co[i][j][1] = dinc*op_buf;                       // y
+            tan_phi = (tan_oriv+tan_vvspan[j][i])/(1-tan_oriv*tan_vvspan[j][i]);
             
-            dvar_co[i][j][2] = z + dbase*sin_phi;                 // z
-            dinc_co[i][j][2] = dinc*sin_phi;                      // z
+            dvar_z[i] = z + dbase*tan_phi;                 // z
+            dinc_z[i] = dinc*tan_phi;                      // z
         }
-    }
-    unsigned short xt, yt;
-    dvar_ptr_x = &dvar_co[0][0][0];
-    dinc_ptr_x = &dinc_co[0][0][0];
-    fimg_ptr = &fimg[0][0][0];
-    for(i=0;i<PIXEL_COUNT;i++){
-        dvar_ptr_y = dvar_ptr_x+1;
-        dinc_ptr_y = dinc_ptr_x+1;
-        dvar_ptr_z = dvar_ptr_x+2;
-        dinc_ptr_z = dinc_ptr_x+2;
         k=0;
+        hb = 0;
+        he = SCREEN_HEIGHT-1;
+        i = he;
         while(k<dlim){
-            xt = (unsigned short)(*dvar_ptr_x)%MAP_WIDTH;
-            yt = (unsigned short)(*dvar_ptr_y)%MAP_HEIGHT;
-            if(himgarr[yt][xt]>=*dvar_ptr_z){
-                memcpy(fimg_ptr, cimgarr[yt][xt], 3);
+            xt = (unsigned short)(dvar_x)%MAP_WIDTH;
+            yt = (unsigned short)(dvar_y)%MAP_HEIGHT;
+            t = yt*MAP_WIDTH + xt;
+            cptr = &cimgarr[0][0][0] + t*3;
+            hptr = &himgarr[0][0] + t;
+            while(i>=hb && (dvar_z[i]+k*dinc_z[i])<=(*hptr)){
+                memcpy(fimg[i][j], cptr, 3);
+                i--;
+            }
+            if(i==-1){
                 break;
             }
-            else{
-                *dvar_ptr_x += *dinc_ptr_x;                       // x
-                *dvar_ptr_y += *dinc_ptr_y;                       // y
-                *dvar_ptr_z += *dinc_ptr_z;                       // z
-                k++;
+            k++;
+            dvar_x += dinc_x;
+            dvar_y += dinc_y;
+        }
+        if(k==dlim){
+            for(;i>=hb;i--){
+                memcpy(fimg[i][j], sky, 3);
             }
         }
-        dvar_ptr_x += 3;
-        dinc_ptr_x += 3;
-        fimg_ptr += 3;
     }
     gRenderSurface = SDL_CreateRGBSurfaceFrom((void*)fimg, SCREEN_WIDTH, SCREEN_HEIGHT, 24, 3*SCREEN_WIDTH, 0x000000ff, 0x0000ff00, 0x00ff0000, 0);
     SDL_BlitSurface(gRenderSurface, NULL, gScreenSurface, NULL);
@@ -137,15 +127,6 @@ bool my_setup(){
             }
         }
     }
-
-    // initialize sky array
-    for(i=0;i<SCREEN_HEIGHT;i++){
-        for(j=0;j<SCREEN_WIDTH;j++){
-            sky[i][j][0] = 135;
-            sky[i][j][1] = 206;
-            sky[i][j][2] = 235;
-        }
-    }
     
     // compute sin and cos of relavent angles
     double wl = (SCREEN_WIDTH-1)/2;
@@ -153,7 +134,7 @@ bool my_setup(){
     int twl = (int) wl;
     int thl = (int) hl;
     double t1, t2;
-    double hvspan, vvspan;
+    double hvspan;
     for(j=0;j<=twl;j++){
         t1 = wl-j;
         
@@ -167,22 +148,15 @@ bool my_setup(){
         for(i=0;i<=thl;i++){
             t2 = hl-i;
             
-            vvspan = atan((t2*p2ip)/sqrt(pow(t1*p2ip, 2)+pow(d2s, 2)));
-            
-            sin_vvspan[i][j] = sin(vvspan);
-            sin_vvspan[i][SCREEN_WIDTH-j-1] = sin_vvspan[i][j];
-            sin_vvspan[SCREEN_HEIGHT-i-1][j] = -sin_vvspan[i][j];
-            sin_vvspan[SCREEN_HEIGHT-i-1][SCREEN_WIDTH-j-1] = -sin_vvspan[i][j];
-            
-            cos_vvspan[i][j] = cos(vvspan);
-            cos_vvspan[i][SCREEN_WIDTH-j-1] = cos_vvspan[i][j];
-            cos_vvspan[SCREEN_HEIGHT-i-1][j] = cos_vvspan[i][j];
-            cos_vvspan[SCREEN_HEIGHT-i-1][SCREEN_WIDTH-j-1] = cos_vvspan[i][j];
+            tan_vvspan[j][i] = (t2*p2ip)/sqrt(pow(t1*p2ip, 2)+pow(d2s, 2));
+            tan_vvspan[SCREEN_WIDTH-j-1][i] = tan_vvspan[j][i];
+            tan_vvspan[j][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
+            tan_vvspan[SCREEN_WIDTH-j-1][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
         }
     }
     
     // compute dbase
-    dbase = sqrt(pow(p2ip*hl, 2) + pow(p2ip*wl, 2) + pow(d2s, 2));
+    dbase = sqrt(pow(p2ip*wl, 2) + pow(d2s, 2));
     
     return true;
 }
