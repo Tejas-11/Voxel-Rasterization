@@ -20,8 +20,8 @@
 // openCL parameters
 cl_mem gx, gy, gz;
 cl_mem gdbase, gdinc, gdlim;
-cl_mem gcos_orih, gsin_orih, gcos_oriv, gsin_oriv;
-cl_mem gcos_hvspan, gsin_hvspan, gcos_vvspan, gsin_vvspan;
+cl_mem gcos_orih, gsin_orih, gtan_oriv;
+cl_mem gcos_hvspan, gsin_hvspan, gtan_vvspan;
 cl_mem ghimgarr, gcimgarr;
 cl_mem gfimg;
 cl_platform_id gplatform;
@@ -56,15 +56,14 @@ static double d2s = 2, dinc = 0.5, dbase;
 static int dlim = 1600;
 
 // optimization variables
-static double cos_orih, sin_orih, cos_oriv, sin_oriv;
-static double sin_hvspan[SCREEN_WIDTH], sin_vvspan[SCREEN_HEIGHT][SCREEN_WIDTH];
-static double cos_hvspan[SCREEN_WIDTH], cos_vvspan[SCREEN_HEIGHT][SCREEN_WIDTH];
+static double cos_orih, sin_orih, tan_oriv;
+static double sin_hvspan[SCREEN_WIDTH], cos_hvspan[SCREEN_WIDTH];
+static double tan_vvspan[SCREEN_WIDTH][SCREEN_HEIGHT];
 
 
 void gpu_rasterize(){
     cl_int err;
-    sin_oriv = sin(oriv);
-    cos_oriv = cos(oriv);
+    tan_oriv = tan(oriv);
     sin_orih = sin(orih);
     cos_orih = cos(orih);
     err = clEnqueueWriteBuffer(gqueue, gx, CL_TRUE, 0, sizeof(double), &x, 0, NULL, NULL);
@@ -72,8 +71,7 @@ void gpu_rasterize(){
     err = clEnqueueWriteBuffer(gqueue, gz, CL_TRUE, 0, sizeof(double), &z, 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gcos_orih, CL_TRUE, 0, sizeof(double), &cos_orih, 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gsin_orih, CL_TRUE, 0, sizeof(double), &sin_orih, 0, NULL, NULL);
-    err = clEnqueueWriteBuffer(gqueue, gcos_oriv, CL_TRUE, 0, sizeof(double), &cos_oriv, 0, NULL, NULL);
-    err = clEnqueueWriteBuffer(gqueue, gsin_oriv, CL_TRUE, 0, sizeof(double), &sin_oriv, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(gqueue, gtan_oriv, CL_TRUE, 0, sizeof(double), &tan_oriv, 0, NULL, NULL);
     err = clEnqueueNDRangeKernel(gqueue, gkernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
     //printf("%d\n", err);
     clFinish(gqueue);
@@ -119,7 +117,7 @@ bool my_setup(){
     int twl = (int) wl;
     int thl = (int) hl;
     double t1, t2;
-    double hvspan, vvspan;
+    double hvspan;
     for(j=0;j<=twl;j++){
         t1 = wl-j;
         
@@ -133,22 +131,15 @@ bool my_setup(){
         for(i=0;i<=thl;i++){
             t2 = hl-i;
             
-            vvspan = atan((t2*p2ip)/sqrt(pow(t1*p2ip, 2)+pow(d2s, 2)));
-            
-            sin_vvspan[i][j] = sin(vvspan);
-            sin_vvspan[i][SCREEN_WIDTH-j-1] = sin_vvspan[i][j];
-            sin_vvspan[SCREEN_HEIGHT-i-1][j] = -sin_vvspan[i][j];
-            sin_vvspan[SCREEN_HEIGHT-i-1][SCREEN_WIDTH-j-1] = -sin_vvspan[i][j];
-            
-            cos_vvspan[i][j] = cos(vvspan);
-            cos_vvspan[i][SCREEN_WIDTH-j-1] = cos_vvspan[i][j];
-            cos_vvspan[SCREEN_HEIGHT-i-1][j] = cos_vvspan[i][j];
-            cos_vvspan[SCREEN_HEIGHT-i-1][SCREEN_WIDTH-j-1] = cos_vvspan[i][j];
+            tan_vvspan[j][i] = (t2*p2ip)/sqrt(pow(t1*p2ip, 2)+pow(d2s, 2));
+            tan_vvspan[SCREEN_WIDTH-j-1][i] = tan_vvspan[j][i];
+            tan_vvspan[j][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
+            tan_vvspan[SCREEN_WIDTH-j-1][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
         }
     }
     
     // compute dbase
-    dbase = sqrt(pow(p2ip*hl, 2) + pow(p2ip*wl, 2) + pow(d2s, 2));
+    dbase = sqrt(pow(p2ip*wl, 2) + pow(d2s, 2));
     
     // load accelerated code from PROGRAM_PATH
     FILE *fp;
@@ -164,7 +155,7 @@ bool my_setup(){
 
     // initailize local & global size for accelerated code
     localSize = 64;
-    globalSize = ceil(PIXEL_COUNT/(float)localSize)*localSize;
+    globalSize = ceil(SCREEN_WIDTH/(float)localSize)*localSize;
     
     // openCL setup
     cl_int err;
@@ -200,16 +191,14 @@ bool my_setup(){
     gdbase = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
     gdinc = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
     gdlim = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(int), NULL, &err);
-    // sin cos of viwer orientation
+    // sin cos tan of viwer orientation
     gcos_orih = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
     gsin_orih = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
-    gcos_oriv = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
-    gsin_oriv = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
-    // sin cos of precomputed angles
+    gtan_oriv = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
+    // sin cos tan of precomputed angles
     gcos_hvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, SCREEN_WIDTH*sizeof(double), NULL, &err);
     gsin_hvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, SCREEN_WIDTH*sizeof(double), NULL, &err);
-    gcos_vvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, PIXEL_COUNT*sizeof(double), NULL, &err);
-    gsin_vvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, PIXEL_COUNT*sizeof(double), NULL, &err);
+    gtan_vvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, PIXEL_COUNT*sizeof(double), NULL, &err);
     // map data
     ghimgarr = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, MAP_HEIGHT*MAP_WIDTH*sizeof(double), NULL, &err);
     gcimgarr = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, MAP_HEIGHT*MAP_WIDTH*3, NULL, &err);
@@ -224,8 +213,7 @@ bool my_setup(){
     // sin cos of precomputed angles
     err = clEnqueueWriteBuffer(gqueue, gcos_hvspan, CL_TRUE, 0, SCREEN_WIDTH*sizeof(double), &cos_hvspan[0], 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gsin_hvspan, CL_TRUE, 0, SCREEN_WIDTH*sizeof(double), &sin_hvspan[0], 0, NULL, NULL);
-    err = clEnqueueWriteBuffer(gqueue, gcos_vvspan, CL_TRUE, 0, PIXEL_COUNT*sizeof(double), &cos_vvspan[0][0], 0, NULL, NULL);
-    err = clEnqueueWriteBuffer(gqueue, gsin_vvspan, CL_TRUE, 0, PIXEL_COUNT*sizeof(double), &sin_vvspan[0][0], 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(gqueue, gtan_vvspan, CL_TRUE, 0, PIXEL_COUNT*sizeof(double), &tan_vvspan[0][0], 0, NULL, NULL);
     // map data
     err = clEnqueueWriteBuffer(gqueue, ghimgarr, CL_TRUE, 0, MAP_HEIGHT*MAP_WIDTH*sizeof(double), &himgarr[0][0], 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gcimgarr, CL_TRUE, 0, MAP_HEIGHT*MAP_WIDTH*3, &cimgarr[0][0][0], 0, NULL, NULL);
@@ -239,15 +227,13 @@ bool my_setup(){
     err = clSetKernelArg(gkernel, 5, sizeof(cl_mem), (void *)&gdlim);
     err = clSetKernelArg(gkernel, 6, sizeof(cl_mem), (void *)&gcos_orih);
     err = clSetKernelArg(gkernel, 7, sizeof(cl_mem), (void *)&gsin_orih);
-    err = clSetKernelArg(gkernel, 8, sizeof(cl_mem), (void *)&gcos_oriv);
-    err = clSetKernelArg(gkernel, 9, sizeof(cl_mem), (void *)&gsin_oriv);
-    err = clSetKernelArg(gkernel, 10, sizeof(cl_mem), (void *)&gcos_hvspan);
-    err = clSetKernelArg(gkernel, 11, sizeof(cl_mem), (void *)&gsin_hvspan);
-    err = clSetKernelArg(gkernel, 12, sizeof(cl_mem), (void *)&gcos_vvspan);
-    err = clSetKernelArg(gkernel, 13, sizeof(cl_mem), (void *)&gsin_vvspan);
-    err = clSetKernelArg(gkernel, 14, sizeof(cl_mem), (void *)&ghimgarr);
-    err = clSetKernelArg(gkernel, 15, sizeof(cl_mem), (void *)&gcimgarr);
-    err = clSetKernelArg(gkernel, 16, sizeof(cl_mem), (void *)&gfimg);
+    err = clSetKernelArg(gkernel, 8, sizeof(cl_mem), (void *)&gtan_oriv);
+    err = clSetKernelArg(gkernel, 9, sizeof(cl_mem), (void *)&gcos_hvspan);
+    err = clSetKernelArg(gkernel, 10, sizeof(cl_mem), (void *)&gsin_hvspan);
+    err = clSetKernelArg(gkernel, 11, sizeof(cl_mem), (void *)&gtan_vvspan);
+    err = clSetKernelArg(gkernel, 12, sizeof(cl_mem), (void *)&ghimgarr);
+    err = clSetKernelArg(gkernel, 13, sizeof(cl_mem), (void *)&gcimgarr);
+    err = clSetKernelArg(gkernel, 14, sizeof(cl_mem), (void *)&gfimg);
     
     return true;
 }
@@ -265,12 +251,10 @@ void my_clean(){
     clReleaseMemObject(gdlim);
     clReleaseMemObject(gcos_orih);
     clReleaseMemObject(gsin_orih);
-    clReleaseMemObject(gcos_oriv);
-    clReleaseMemObject(gsin_oriv);
+    clReleaseMemObject(gtan_oriv);
     clReleaseMemObject(gcos_hvspan);
     clReleaseMemObject(gsin_hvspan);
-    clReleaseMemObject(gcos_vvspan);
-    clReleaseMemObject(gsin_vvspan);
+    clReleaseMemObject(gtan_vvspan);
     clReleaseMemObject(gfimg);
     clReleaseMemObject(ghimgarr);
     clReleaseMemObject(gcimgarr);
