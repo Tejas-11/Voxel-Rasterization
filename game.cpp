@@ -14,9 +14,10 @@
 SDL_Window* gWindow = NULL;
 SDL_Surface* gScreenSurface = NULL;
 SDL_Surface* gRenderSurface = NULL;
+SDL_Event e;
 
 // viewer parameters
-static double x=0, y=0, z=150, orih=0, oriv=0;
+static double x=0, y=0, z=150, orih=0;
 
 // map parameters
 static double h2d=1.0;
@@ -36,48 +37,59 @@ static double dvar_x, dvar_y;
 static double dinc_x, dinc_y;
 static double dvar_z[SCREEN_HEIGHT], dinc_z[SCREEN_HEIGHT];
 static uint8_t sky[3] = {135, 206, 235};
-static double cos_orih, sin_orih, tan_oriv;
-static double cos_theta, sin_theta, tan_phi;
+static double cos_orih, sin_orih;
+static double cos_theta, sin_theta;
 static double sin_hvspan[SCREEN_WIDTH], cos_hvspan[SCREEN_WIDTH];
 static double tan_vvspan[SCREEN_WIDTH][SCREEN_HEIGHT];
 
+// motion parameters
+static bool fwd=false, bwd=false, rht_ang=false, lft_ang=false, rht=false, lft=false, uup=false, dwn=false;
+static double spd=2.0;
+static double ang_spd=0.01;
+static bool quit=false;
+
 
 void rasterize(){
-    int i, j, k;
-    // height begin and end parameters
-    int hb, he, t;
-    unsigned short xt, yt;
+    int i, j, k, t;
+    int xt, yt;
     uint8_t *cptr;
     double *hptr;
-    tan_oriv = tan(oriv);
     sin_orih = sin(orih);
     cos_orih = cos(orih);
     for(j=0;j<SCREEN_WIDTH;j++){
         cos_theta = (cos_orih*cos_hvspan[j])-(sin_orih*sin_hvspan[j]);
         sin_theta = (cos_orih*sin_hvspan[j])+(sin_orih*cos_hvspan[j]);
         
-        dvar_x = x + dbase*cos_theta;                  // x
-        dinc_x = dinc*cos_theta;                       // x
+        dvar_x = x + dbase*cos_theta;                               // x
+        dinc_x = dinc*cos_theta;                                    // x
         
-        dvar_y = y + dbase*sin_theta;                  // y
-        dinc_y = dinc*sin_theta;                       // y
+        dvar_y = y + dbase*sin_theta;                               // y
+        dinc_y = dinc*sin_theta;                                    // y
         for(i=0;i<SCREEN_HEIGHT;i++){
-            tan_phi = (tan_oriv+tan_vvspan[j][i])/(1-tan_oriv*tan_vvspan[j][i]);
-            
-            dvar_z[i] = z + dbase*tan_phi;                 // z
-            dinc_z[i] = dinc*tan_phi;                      // z
+            dvar_z[i] = z + dbase*tan_vvspan[j][i];                 // z
+            dinc_z[i] = dinc*tan_vvspan[j][i];                      // z
         }
         k=0;
-        hb = 0;
-        he = SCREEN_HEIGHT-1;
-        i = he;
+        i = SCREEN_HEIGHT-1;
         while(k<dlim){
-            xt = (unsigned short)(dvar_x)%MAP_WIDTH;
-            yt = (unsigned short)(dvar_y)%MAP_HEIGHT;
+            while(dvar_x<0){
+	            dvar_x += MAP_WIDTH;
+            }
+            while(dvar_x>=MAP_WIDTH){
+	            dvar_x -= MAP_WIDTH;
+            }
+            while(dvar_y<0){
+	            dvar_y += MAP_HEIGHT;
+            }
+            while(dvar_y>=MAP_HEIGHT){
+	            dvar_y -= MAP_HEIGHT;
+            }
+            xt = (int)(dvar_x);
+            yt = (int)(dvar_y);
             t = yt*MAP_WIDTH + xt;
             cptr = &cimgarr[0][0][0] + t*3;
             hptr = &himgarr[0][0] + t;
-            while(i>=hb && (dvar_z[i]+k*dinc_z[i])<=(*hptr)){
+            while(i>=0 && (dvar_z[i]+k*dinc_z[i])<=(*hptr)){
                 memcpy(fimg[i][j], cptr, 3);
                 i--;
             }
@@ -89,7 +101,7 @@ void rasterize(){
             dvar_y += dinc_y;
         }
         if(k==dlim){
-            for(;i>=hb;i--){
+            for(;i>=0;i--){
                 memcpy(fimg[i][j], sky, 3);
             }
         }
@@ -170,6 +182,127 @@ void my_clean(){
     SDL_Quit();
 }
 
+void update(){
+    while(SDL_PollEvent(&e)!=0){
+        if(e.type == SDL_KEYDOWN){
+            switch(e.key.keysym.sym){
+                case SDLK_ESCAPE:
+                quit = true;
+                break;
+
+                case SDLK_UP:
+                fwd = true;
+                break;
+
+                case SDLK_DOWN:
+                bwd = true;
+                break;
+
+                case SDLK_LEFT:
+                lft_ang = true;
+                break;
+
+                case SDLK_RIGHT:
+                rht_ang = true;
+                break;
+
+                case SDLK_w:
+                uup = true;
+                break;
+
+                case SDLK_s:
+                dwn = true;
+                break;
+
+                case SDLK_a:
+                lft = true;
+                break;
+
+                case SDLK_d:
+                rht = true;
+                break;
+            }
+        }
+        else if(e.type == SDL_KEYUP){
+            switch(e.key.keysym.sym){
+                case SDLK_UP:
+                fwd = false;
+                break;
+
+                case SDLK_DOWN:
+                bwd = false;
+                break;
+
+                case SDLK_LEFT:
+                lft_ang = false;
+                break;
+
+                case SDLK_RIGHT:
+                rht_ang = false;
+                break;
+
+                case SDLK_w:
+                uup = false;
+                break;
+
+                case SDLK_s:
+                dwn = false;
+                break;
+
+                case SDLK_a:
+                lft = false;
+                break;
+
+                case SDLK_d:
+                rht = false;
+                break;
+            }
+        }
+    }
+
+    if(fwd){
+        x += spd*cos_orih;
+        y += spd*sin_orih;
+    }
+    if(bwd){
+        x -= spd*cos_orih;
+        y -= spd*sin_orih;
+    }
+    if(lft){
+        x -= spd*sin_orih;
+        y += spd*cos_orih;
+    }
+    if(rht){
+        x += spd*sin_orih;
+        y -= spd*cos_orih;
+    }
+    if(uup){
+        z += spd;
+    }
+    if(dwn){
+        z -= spd;
+    }
+    if(lft_ang){
+        orih += ang_spd;
+    }
+    if(rht_ang){
+        orih -= ang_spd;
+    }
+
+    while(x<0){
+        x += MAP_WIDTH;
+    }
+    while(x>=MAP_WIDTH){
+        x -= MAP_WIDTH;
+    }
+    while(y<0){
+        y += MAP_HEIGHT;
+    }
+    while(y>=MAP_HEIGHT){
+        y -= MAP_HEIGHT;
+    }
+}
+
 int main(){
     using std::chrono::high_resolution_clock;
     using std::chrono::duration_cast;
@@ -178,16 +311,17 @@ int main(){
     if(!my_setup()){
         return 0;
     }
-    int i;
+    int i=0;
     auto t1 = high_resolution_clock::now();
-    for(i=0;i<50;i++){
+    while(!quit){
         rasterize();
-        x += 1;
+        update();
+        i++;
     }
     auto t2 = high_resolution_clock::now();
 
     /* Getting number of milliseconds as a double. */
-    duration<double, std::milli> du1 = (t2 - t1)/50;
+    duration<double, std::milli> du1 = (t2 - t1)/i;
     std::cout << du1.count() << "ms\n";
 
     my_clean();
