@@ -20,7 +20,7 @@
 // openCL parameters
 cl_mem gx, gy, gz;
 cl_mem gdbase, gdinc, gdlim;
-cl_mem gcos_orih, gsin_orih, gtan_oriv;
+cl_mem gcos_orih, gsin_orih;
 cl_mem gcos_hvspan, gsin_hvspan, gtan_vvspan;
 cl_mem ghimgarr, gcimgarr;
 cl_mem gfimg;
@@ -38,9 +38,10 @@ size_t localSize, globalSize, kernelSourceSize;
 SDL_Window* gWindow = NULL;
 SDL_Surface* gScreenSurface = NULL;
 SDL_Surface* gRenderSurface = NULL;
+SDL_Event e;
 
 // viewer parameters
-static double x=0, y=0, z=150, orih=0, oriv=0;
+static double x=0, y=0, z=150, orih=0;
 
 // map parameters
 static double h2d=1.0;
@@ -56,14 +57,19 @@ static double d2s = 2, dinc = 0.5, dbase;
 static int dlim = 1600;
 
 // optimization variables
-static double cos_orih, sin_orih, tan_oriv;
+static double cos_orih, sin_orih;
 static double sin_hvspan[SCREEN_WIDTH], cos_hvspan[SCREEN_WIDTH];
 static double tan_vvspan[SCREEN_WIDTH][SCREEN_HEIGHT];
+
+// motion parameters
+static bool fwd=false, bwd=false, rht_ang=false, lft_ang=false, rht=false, lft=false, uup=false, dwn=false;
+static double spd=2.0;
+static double ang_spd=0.01;
+static bool quit=false;
 
 
 void gpu_rasterize(){
     cl_int err;
-    tan_oriv = tan(oriv);
     sin_orih = sin(orih);
     cos_orih = cos(orih);
     err = clEnqueueWriteBuffer(gqueue, gx, CL_TRUE, 0, sizeof(double), &x, 0, NULL, NULL);
@@ -71,7 +77,6 @@ void gpu_rasterize(){
     err = clEnqueueWriteBuffer(gqueue, gz, CL_TRUE, 0, sizeof(double), &z, 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gcos_orih, CL_TRUE, 0, sizeof(double), &cos_orih, 0, NULL, NULL);
     err = clEnqueueWriteBuffer(gqueue, gsin_orih, CL_TRUE, 0, sizeof(double), &sin_orih, 0, NULL, NULL);
-    err = clEnqueueWriteBuffer(gqueue, gtan_oriv, CL_TRUE, 0, sizeof(double), &tan_oriv, 0, NULL, NULL);
     err = clEnqueueNDRangeKernel(gqueue, gkernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
     //printf("%d\n", err);
     clFinish(gqueue);
@@ -174,7 +179,7 @@ bool my_setup(){
     err = clBuildProgram(gprogram, 1, &gdevice, NULL, NULL, NULL);
     //printf("%d\n", err);
     if(err!=CL_SUCCESS){
-        char log_buffer[50000];
+        char log_buffer[500000];
         size_t log_size;
         clGetProgramBuildInfo(gprogram, gdevice, CL_PROGRAM_BUILD_LOG, sizeof(log_buffer), log_buffer, &log_size);
         printf("--- BUILD ERROR LOG ---\n%s\n", log_buffer);
@@ -194,7 +199,6 @@ bool my_setup(){
     // sin cos tan of viwer orientation
     gcos_orih = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
     gsin_orih = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
-    gtan_oriv = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, sizeof(double), NULL, &err);
     // sin cos tan of precomputed angles
     gcos_hvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, SCREEN_WIDTH*sizeof(double), NULL, &err);
     gsin_hvspan = clCreateBuffer(gcontext, CL_MEM_READ_ONLY, SCREEN_WIDTH*sizeof(double), NULL, &err);
@@ -227,13 +231,12 @@ bool my_setup(){
     err = clSetKernelArg(gkernel, 5, sizeof(cl_mem), (void *)&gdlim);
     err = clSetKernelArg(gkernel, 6, sizeof(cl_mem), (void *)&gcos_orih);
     err = clSetKernelArg(gkernel, 7, sizeof(cl_mem), (void *)&gsin_orih);
-    err = clSetKernelArg(gkernel, 8, sizeof(cl_mem), (void *)&gtan_oriv);
-    err = clSetKernelArg(gkernel, 9, sizeof(cl_mem), (void *)&gcos_hvspan);
-    err = clSetKernelArg(gkernel, 10, sizeof(cl_mem), (void *)&gsin_hvspan);
-    err = clSetKernelArg(gkernel, 11, sizeof(cl_mem), (void *)&gtan_vvspan);
-    err = clSetKernelArg(gkernel, 12, sizeof(cl_mem), (void *)&ghimgarr);
-    err = clSetKernelArg(gkernel, 13, sizeof(cl_mem), (void *)&gcimgarr);
-    err = clSetKernelArg(gkernel, 14, sizeof(cl_mem), (void *)&gfimg);
+    err = clSetKernelArg(gkernel, 8, sizeof(cl_mem), (void *)&gcos_hvspan);
+    err = clSetKernelArg(gkernel, 9, sizeof(cl_mem), (void *)&gsin_hvspan);
+    err = clSetKernelArg(gkernel, 10, sizeof(cl_mem), (void *)&gtan_vvspan);
+    err = clSetKernelArg(gkernel, 11, sizeof(cl_mem), (void *)&ghimgarr);
+    err = clSetKernelArg(gkernel, 12, sizeof(cl_mem), (void *)&gcimgarr);
+    err = clSetKernelArg(gkernel, 13, sizeof(cl_mem), (void *)&gfimg);
     
     return true;
 }
@@ -251,7 +254,6 @@ void my_clean(){
     clReleaseMemObject(gdlim);
     clReleaseMemObject(gcos_orih);
     clReleaseMemObject(gsin_orih);
-    clReleaseMemObject(gtan_oriv);
     clReleaseMemObject(gcos_hvspan);
     clReleaseMemObject(gsin_hvspan);
     clReleaseMemObject(gtan_vvspan);
@@ -269,6 +271,128 @@ void my_clean(){
     SDL_Quit();
 }
 
+void update(){
+    while(SDL_PollEvent(&e)!=0){
+        if(e.type == SDL_KEYDOWN){
+            switch(e.key.keysym.sym){
+                case SDLK_ESCAPE:
+                quit = true;
+                break;
+
+                case SDLK_UP:
+                fwd = true;
+                break;
+
+                case SDLK_DOWN:
+                bwd = true;
+                break;
+
+                case SDLK_LEFT:
+                lft_ang = true;
+                break;
+
+                case SDLK_RIGHT:
+                rht_ang = true;
+                break;
+
+                case SDLK_w:
+                uup = true;
+                break;
+
+                case SDLK_s:
+                dwn = true;
+                break;
+
+                case SDLK_a:
+                lft = true;
+                break;
+
+                case SDLK_d:
+                rht = true;
+                break;
+            }
+        }
+        else if(e.type == SDL_KEYUP){
+            switch(e.key.keysym.sym){
+                case SDLK_UP:
+                fwd = false;
+                break;
+
+                case SDLK_DOWN:
+                bwd = false;
+                break;
+
+                case SDLK_LEFT:
+                lft_ang = false;
+                break;
+
+                case SDLK_RIGHT:
+                rht_ang = false;
+                break;
+
+                case SDLK_w:
+                uup = false;
+                break;
+
+                case SDLK_s:
+                dwn = false;
+                break;
+
+                case SDLK_a:
+                lft = false;
+                break;
+
+                case SDLK_d:
+                rht = false;
+                break;
+            }
+        }
+    }
+
+    if(fwd){
+        x += spd*cos_orih;
+        y += spd*sin_orih;
+    }
+    if(bwd){
+        x -= spd*cos_orih;
+        y -= spd*sin_orih;
+    }
+    if(lft){
+        x -= spd*sin_orih;
+        y += spd*cos_orih;
+    }
+    if(rht){
+        x += spd*sin_orih;
+        y -= spd*cos_orih;
+    }
+    if(uup){
+        z += spd;
+    }
+    if(dwn){
+        z -= spd;
+    }
+    if(lft_ang){
+        orih += ang_spd;
+    }
+    if(rht_ang){
+        orih -= ang_spd;
+    }
+
+    while(x<0){
+        x += MAP_WIDTH;
+    }
+    while(x>=MAP_WIDTH){
+        x -= MAP_WIDTH;
+    }
+    while(y<0){
+        y += MAP_HEIGHT;
+    }
+    while(y>=MAP_HEIGHT){
+        y -= MAP_HEIGHT;
+    }
+}
+
+
 int main(){
     using std::chrono::high_resolution_clock;
     using std::chrono::duration_cast;
@@ -277,16 +401,17 @@ int main(){
     if(!my_setup()){
         return 0;
     }
-    int i;
+    int i=0;
     auto t1 = high_resolution_clock::now();
-    for(i=0;i<50;i++){
+    while(!quit){
         gpu_rasterize();
-        x += 1;
+        update();
+        i++;
     }
     auto t2 = high_resolution_clock::now();
 
     /* Getting number of milliseconds as a double. */
-    duration<double, std::milli> du1 = (t2 - t1)/50;
+    duration<double, std::milli> du1 = (t2 - t1)/i;
     std::cout << du1.count() << "ms\n";
 
     my_clean();

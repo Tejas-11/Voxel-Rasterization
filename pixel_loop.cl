@@ -4,11 +4,10 @@
 #define SCREEN_HEIGHT 720
 
 
-__kernel void pixel_loop(__global double *x, __global double *y, __global double *z, __global const double *dbase, __global const double *dinc, __global const int *dlim, __global double *cos_orih, __global double *sin_orih, __global double *tan_oriv, __global const double *cos_hvspan, __global const double *sin_hvspan, __global const double *tan_vvspan, __global const double *himgarr, __global const uchar *cimgarr, __global uchar *fimg){
+__kernel void pixel_loop(__global double *x, __global double *y, __global double *z, __global const double *dbase, __global const double *dinc, __global const int *dlim, __global double *cos_orih, __global double *sin_orih, __global const double *cos_hvspan, __global const double *sin_hvspan, __global const double *tan_vvspan, __global const double *himgarr, __global const uchar *cimgarr, __global uchar *fimg){
     int j = get_global_id(0);
     int i, k;
     int xt, yt;
-    int hb, he;
     int t, t3, fd = SCREEN_WIDTH*3;
     uchar *cptr;
     double *hptr;
@@ -32,14 +31,11 @@ __kernel void pixel_loop(__global double *x, __global double *y, __global double
     yvar = *y + (*dbase)*sin_theta;
     yinc = (*dinc)*sin_theta;
     
-    hb = 0;
-    he = SCREEN_HEIGHT-1;
-    i = he;
+    i = SCREEN_HEIGHT-1;
     k = 0;
     
-    tan_phi = ((*tan_oriv)+(*tan_vvspan))/(1-((*tan_oriv)*(*tan_vvspan)));
-    zvar = *z + (*dbase)*tan_phi;
-    zinc = (*dinc)*tan_phi;
+    zvar = *z + (*dbase)*(*tan_vvspan);
+    zinc = (*dinc)*(*tan_vvspan);
     tan_vvspan--;
     
     while(k<(*dlim)){
@@ -47,15 +43,14 @@ __kernel void pixel_loop(__global double *x, __global double *y, __global double
         yt = ((int)floor(yvar)%MAP_HEIGHT+MAP_HEIGHT)%MAP_HEIGHT;
         t = yt*MAP_WIDTH+xt;
         t3 = t*3;
-        while(i>=hb && himgarr[t]>=(zvar+k*zinc)){
+        while(i>=0 && himgarr[t]>=(zvar+k*zinc)){
             fimg[0] = cimgarr[t3+0];
             fimg[1] = cimgarr[t3+1];
             fimg[2] = cimgarr[t3+2];
             i--;
             
-            tan_phi = ((*tan_oriv)+(*tan_vvspan))/(1-((*tan_oriv)*(*tan_vvspan)));
-            zvar = *z + (*dbase)*tan_phi;
-            zinc = (*dinc)*tan_phi;
+            zvar = *z + (*dbase)*(*tan_vvspan);
+            zinc = (*dinc)*(*tan_vvspan);
             tan_vvspan--;
             
             fimg -= fd;
@@ -68,7 +63,7 @@ __kernel void pixel_loop(__global double *x, __global double *y, __global double
         yvar += yinc;
     }
     if(k==(*dlim)){
-        for(;i>=hb;i--){
+        for(;i>=0;i--){
             fimg[0] = 135;
             fimg[1] = 206;
             fimg[2] = 235;
