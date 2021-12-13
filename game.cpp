@@ -19,7 +19,7 @@ SDL_Surface* gRenderSurface = NULL;
 SDL_Event e;
 
 // viewer parameters
-static double x=0, y=0, z=150, orih=0;
+static double x=0, y=0, z=150, orih=0, oriv=0;
 
 // map parameters
 static double h2d=1.0;
@@ -30,22 +30,25 @@ static double himgarr[MAP_HEIGHT][MAP_WIDTH];
 static uint8_t fimg[SCREEN_HEIGHT][SCREEN_WIDTH][3] = {0};
 
 // virtual space to render surface mapping parameters
-static double p2ip = 0.0060;
+static double p2ip = 0.0040;
 static double d2s = 2, dinc = 0.5, dbase;
 static int dlim = 1600;
 
 // optimization variables
-static double cos_orih, sin_orih;
-static double dvar_z[NUMBER_OF_THREADS][SCREEN_HEIGHT], dinc_z[NUMBER_OF_THREADS][SCREEN_HEIGHT];
+static double cos_orih, sin_orih, cos_oriv, sin_oriv;
 static uint8_t sky[3] = {135, 206, 235};
-static double sin_hvspan[SCREEN_WIDTH], cos_hvspan[SCREEN_WIDTH];
-static double tan_vvspan[SCREEN_WIDTH][SCREEN_HEIGHT];
+static double pb2 = asin(1);
+static double pi = 2*pb2;
+static double tpi = 2*pi;
+static double wl = (SCREEN_WIDTH-1)*p2ip/2;
+static double hl = (SCREEN_HEIGHT-1)*p2ip/2;
 
 // motion parameters
-static bool fwd=false, bwd=false, rht_ang=false, lft_ang=false, rht=false, lft=false, uup=false, dwn=false;
+static bool fwd=false, bwd=false, rht=false, lft=false;
 static double spd=2.0;
 static double ang_spd=0.01;
-static bool quit=false;
+static bool quit = false;
+static double vanglimu, vangliml;
 
 // threading parameters
 typedef struct{
@@ -61,72 +64,114 @@ SDL_Thread *threads[NUMBER_OF_THREADS];
 
 int thread_rasterize(void* data){
     ThreadData *tdata = (ThreadData*)data;
-    int i, j, k, t;
+    int i, j, k;
+    // height begin and end parameters
+    int hb, he, t;
     int xt, yt;
     uint8_t *cptr;
     double *hptr;
     double dvar_x, dvar_y;
     double dinc_x, dinc_y;
-    double cos_theta, sin_theta;
-    double *dzvar, *dzinc;
-    dzvar = dvar_z[tdata->id];
-    dzinc = dinc_z[tdata->id];
+    double dvar_z, dinc_z;
+    double xvb, yvb, xib, yib;
+    double cos_theta, sin_theta, tan_phi;
+    double di, dj, djs;
+    double t1, t2, t3, sin_hv, cos_hv;
     int sw, ew;
     sw = tdata->sw;
     ew = tdata->ew;
     while(tdata->active){
         if(tdata->updated){
+            sin_oriv = sin(oriv);
+            cos_oriv = cos(oriv);
             sin_orih = sin(orih);
             cos_orih = cos(orih);
+            dj = wl - sw*p2ip;
             for(j=sw;j<ew;j++){
-                cos_theta = (cos_orih*cos_hvspan[j])-(sin_orih*sin_hvspan[j]);
-                sin_theta = (cos_orih*sin_hvspan[j])+(sin_orih*cos_hvspan[j]);
+                djs = dj*dj;
                 
-                dvar_x = x + dbase*cos_theta;                              // x
-                dinc_x = dinc*cos_theta;                                   // x
+                di = -hl;
+                xvb = -9999;
+                yvb = -9999;
+                xib = -9999;
+                yib = -9999;
+                for(i=SCREEN_HEIGHT-1;i>=0;i--){
+                    t1 = d2s*cos_oriv - di*sin_oriv;
+                    t2 = t1*t1;
+                    t3 = sqrt(djs+t2);
+                    sin_hv = dj/t3;
+                    cos_hv = t1/t3;
+                    
+                    cos_theta = cos_orih*cos_hv-sin_orih*sin_hv;
+                    sin_theta = cos_orih*sin_hv+sin_orih*cos_hv;
+                    
+                    dvar_x = x + dbase*cos_theta;                  // x
+                    dinc_x = dinc*cos_theta;                       // x
+                    
+                    dvar_y = y + dbase*sin_theta;                  // y
+                    dinc_y = dinc*sin_theta;                       // y
                 
-                dvar_y = y + dbase*sin_theta;                              // y
-                dinc_y = dinc*sin_theta;                                   // y
-                for(i=0;i<SCREEN_HEIGHT;i++){
-                    dzvar[i] = z + dbase*tan_vvspan[j][i];                 // z
-                    dzinc[i] = dinc*tan_vvspan[j][i];                      // z
-                }
-                k=0;
-                i = SCREEN_HEIGHT-1;
-                while(k<dlim){
-                    while(dvar_x<0){
-	                    dvar_x += MAP_WIDTH;
+                    tan_phi = (di*cos_oriv+d2s*sin_oriv)/t3;
+
+                    dvar_z = z + dbase*tan_phi;                 // z
+                    dinc_z = dinc*tan_phi;                      // z
+
+                    di += p2ip;
+                    if((int)dvar_x!=(int)xvb || (int)dvar_y!=(int)yvb || (int)(dvar_x+k*dinc_x)!=(int)(xvb+k*xib) || (int)(dvar_y+k*dinc_y)!=(int)(yvb+k*yib)){
+                        xvb = dvar_x;
+                        yvb = dvar_y;
+                        xib = dinc_x;
+                        yib = dinc_y;
+                        k=0;
                     }
-                    while(dvar_x>=MAP_WIDTH){
-	                    dvar_x -= MAP_WIDTH;
+                    else{
+                        xvb = dvar_x;
+                        yvb = dvar_y;
+                        xib = dinc_x;
+                        yib = dinc_y;
+
+                        dvar_x += k*dinc_x;
+                        dvar_y += k*dinc_y;
+                        dvar_z += k*dinc_z;
                     }
-                    while(dvar_y<0){
-	                    dvar_y += MAP_HEIGHT;
+                    while(k<dlim){
+                        while(dvar_x<0){
+                            dvar_x += MAP_WIDTH;
+                        }
+                        while(dvar_x>=MAP_WIDTH){
+                            dvar_x -= MAP_WIDTH;
+                        }
+                        while(dvar_y<0){
+                            dvar_y += MAP_HEIGHT;
+                        }
+                        while(dvar_y>=MAP_HEIGHT){
+                            dvar_y -= MAP_HEIGHT;
+                        }
+                        xt = (int)(dvar_x);
+                        yt = (int)(dvar_y);
+                        t = yt*MAP_WIDTH + xt;
+                        cptr = &cimgarr[0][0][0] + t*3;
+                        hptr = &himgarr[0][0] + t;
+                        if(dvar_z<=(*hptr)){
+                            memcpy(fimg[i][j], cptr, 3);
+                            break;
+                        }
+                        k++;
+                        dvar_x += dinc_x;
+                        dvar_y += dinc_y;
+                        dvar_z += dinc_z;
+                        if(dinc_z>=0 && dvar_z>256){
+                            dvar_x += (dlim-k)*dinc_x;
+                            dvar_y += (dlim-k)*dinc_y;
+                            dvar_z += (dlim-k)*dinc_z;
+                            k=dlim;
+                        }
                     }
-                    while(dvar_y>=MAP_HEIGHT){
-	                    dvar_y -= MAP_HEIGHT;
-                    }
-                    xt = (int)(dvar_x);
-                    yt = (int)(dvar_y);
-                    t = yt*MAP_WIDTH + xt;
-                    cptr = &cimgarr[0][0][0] + t*3;
-                    hptr = &himgarr[0][0] + t;
-                    while(i>=0 && (dzvar[i]+k*dzinc[i])<=(*hptr)){
-                        memcpy(fimg[i][j], cptr, 3);
-                        i--;
-                    }
-                    if(i==-1){
-                        break;
-                    }
-                    k++;
-                    dvar_x += dinc_x;
-                    dvar_y += dinc_y;
-                }
-                if(k==dlim){
-                    for(;i>=0;i--){
+                    if(k==dlim){
                         memcpy(fimg[i][j], sky, 3);
                     }
                 }
+                dj -= p2ip;
             }
             tdata->updated = false;
         }
@@ -152,6 +197,9 @@ bool my_setup(){
         return false;
     }
     gScreenSurface = SDL_GetWindowSurface(gWindow);
+
+    // hide mouse and capture all relative mouse motion unconstrained by window boundary
+    SDL_SetRelativeMouseMode(SDL_TRUE);
     
     // load color and height map images to memory
     int i, j, k;
@@ -165,36 +213,12 @@ bool my_setup(){
             }
         }
     }
-    
-    // compute sin and cos of relavent angles
-    double wl = (SCREEN_WIDTH-1)/2;
-    double hl = (SCREEN_HEIGHT-1)/2;
-    int twl = (int) wl;
-    int thl = (int) hl;
-    double t1, t2;
-    double hvspan;
-    for(j=0;j<=twl;j++){
-        t1 = wl-j;
-        
-        hvspan = atan((t1*p2ip)/d2s);
-        
-        sin_hvspan[j] = sin(hvspan);
-        sin_hvspan[SCREEN_WIDTH-j-1] = -sin_hvspan[j];
-        
-        cos_hvspan[j] = cos(hvspan);
-        cos_hvspan[SCREEN_WIDTH-j-1] = cos_hvspan[j];
-        for(i=0;i<=thl;i++){
-            t2 = hl-i;
-            
-            tan_vvspan[j][i] = (t2*p2ip)/sqrt(pow(t1*p2ip, 2)+pow(d2s, 2));
-            tan_vvspan[SCREEN_WIDTH-j-1][i] = tan_vvspan[j][i];
-            tan_vvspan[j][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
-            tan_vvspan[SCREEN_WIDTH-j-1][SCREEN_HEIGHT-i-1] = -tan_vvspan[j][i];
-        }
-    }
-    
+
+    vanglimu = pb2 - atan(hl/d2s);
+    vangliml = -vanglimu;
+
     // compute dbase
-    dbase = sqrt(pow(p2ip*wl, 2) + pow(d2s, 2));
+    dbase = sqrt(pow(wl, 2) + pow(d2s, 2));
     
     // threads setup
     int sw =0, dw = SCREEN_WIDTH/NUMBER_OF_THREADS, mw = SCREEN_WIDTH%NUMBER_OF_THREADS;
@@ -235,6 +259,7 @@ void my_clean(){
     SDL_Quit();
 }
 
+
 void update(){
     while(SDL_PollEvent(&e)!=0){
         if(e.type == SDL_KEYDOWN){
@@ -252,26 +277,10 @@ void update(){
                 break;
 
                 case SDLK_LEFT:
-                lft_ang = true;
-                break;
-
-                case SDLK_RIGHT:
-                rht_ang = true;
-                break;
-
-                case SDLK_w:
-                uup = true;
-                break;
-
-                case SDLK_s:
-                dwn = true;
-                break;
-
-                case SDLK_a:
                 lft = true;
                 break;
 
-                case SDLK_d:
+                case SDLK_RIGHT:
                 rht = true;
                 break;
             }
@@ -287,39 +296,36 @@ void update(){
                 break;
 
                 case SDLK_LEFT:
-                lft_ang = false;
-                break;
-
-                case SDLK_RIGHT:
-                rht_ang = false;
-                break;
-
-                case SDLK_w:
-                uup = false;
-                break;
-
-                case SDLK_s:
-                dwn = false;
-                break;
-
-                case SDLK_a:
                 lft = false;
                 break;
 
-                case SDLK_d:
+                case SDLK_RIGHT:
                 rht = false;
                 break;
             }
         }
+        else if(e.type == SDL_MOUSEMOTION){
+            orih -= ang_spd*e.motion.xrel;
+            oriv -= ang_spd*e.motion.yrel;
+        }
+    }
+
+    if(oriv>vanglimu){
+        oriv = vanglimu;
+    }
+    if(oriv<vangliml){
+        oriv = vangliml;
     }
 
     if(fwd){
-        x += spd*cos_orih;
-        y += spd*sin_orih;
+        x += spd*cos_oriv*cos_orih;
+        y += spd*cos_oriv*sin_orih;
+        z += spd*sin_oriv;
     }
     if(bwd){
-        x -= spd*cos_orih;
-        y -= spd*sin_orih;
+        x -= spd*cos_oriv*cos_orih;
+        y -= spd*cos_oriv*sin_orih;
+        z -= spd*sin_oriv;
     }
     if(lft){
         x -= spd*sin_orih;
@@ -328,18 +334,6 @@ void update(){
     if(rht){
         x += spd*sin_orih;
         y -= spd*cos_orih;
-    }
-    if(uup){
-        z += spd;
-    }
-    if(dwn){
-        z -= spd;
-    }
-    if(lft_ang){
-        orih += ang_spd;
-    }
-    if(rht_ang){
-        orih -= ang_spd;
     }
 
     while(x<0){
@@ -365,9 +359,11 @@ int main(){
     if(!my_setup()){
         return 0;
     }
-    int i=0, j;
+    int i=0, j, ft=0;
     auto t1 = high_resolution_clock::now();
+    auto t3=t1, t4=t1;
     while(!quit){
+        t3 = high_resolution_clock::now();
         for(j=0;j<NUMBER_OF_THREADS;j++){
             threads_data[j].updated = true;
         }
@@ -380,6 +376,12 @@ int main(){
         SDL_BlitSurface(gRenderSurface, NULL, gScreenSurface, NULL);
         SDL_UpdateWindowSurface(gWindow);
         update();
+        t4 = high_resolution_clock::now();
+        ft = duration_cast<milliseconds>(t4-t3).count();
+        if(ft<100){
+            ft = 100-ft;
+            SDL_Delay(ft);
+        }
         i++;
     }
     auto t2 = high_resolution_clock::now();
